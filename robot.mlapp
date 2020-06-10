@@ -1,0 +1,380 @@
+classdef myRobot_dd < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        IZURobotTeknolojileriDersiProjeOdeviUIFigure  matlab.ui.Figure
+        DorusalHzSliderLabel  matlab.ui.control.Label
+        DogrusalHizSlider     matlab.ui.control.Slider
+        graph_aci             matlab.ui.control.UIAxes
+        graph_hata            matlab.ui.control.UIAxes
+        graph_tekerlek_hiz    matlab.ui.control.UIAxes
+        graph_kontrol         matlab.ui.control.UIAxes
+        graph_vl              matlab.ui.control.UIAxes
+        graph_vr              matlab.ui.control.UIAxes
+        SimulasyonButton      matlab.ui.control.Button
+        KpEditFieldLabel      matlab.ui.control.Label
+        Kp                    matlab.ui.control.NumericEditField
+        KiEditFieldLabel      matlab.ui.control.Label
+        Ki                    matlab.ui.control.NumericEditField
+        KdEditField_2Label    matlab.ui.control.Label
+        Kd                    matlab.ui.control.NumericEditField
+        AKnobLabel            matlab.ui.control.Label
+        AciKnob               matlab.ui.control.DiscreteKnob
+    end
+
+    
+    properties (Access = public)
+        myRobot % robotics playground objesi olacak
+        running=0; % butona basilip programin calisir durumda oldugunu gosteren degisken
+    end
+    
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Code that executes after component creation
+        function startupFcn(app)
+            app.myRobot = mlrobot; % program basladiginda bir robot nesnesi olusturur.
+            app.IZURobotTeknolojileriDersiProjeOdeviUIFigure.Name = 'IZU Robot Teknolojileri Dersi Proje Odevi - Sami Khwaireh'; %set app title 
+        end
+
+        % Button pushed function: SimulasyonButton
+        function SimulasyonButtonPushed(app, event)
+            
+            if (app.running==1)
+                
+                app.SimulasyonButton.Text = 'Simulasyonu Başlat';
+                robot = app.myRobot;
+                mlrobotstop(robot); % devam eden simulasyonu durdur
+                app.running=0;
+            else
+                app.SimulasyonButton.Text = 'Durdur';
+                app.running=1;
+                robot = app.myRobot;
+                %mlrobotstop(robot); % devam eden simulasyonu durdur
+                mlrobotstart(robot); % simulasyonu baslat
+                
+                
+                TF = 50;  % Simulasyon suresi (Initial simulasyon suresi = 50 saniye) 
+                dt = 0.5; % Iteration-time (Initial zaman araligi = 0.5 saniye)
+                 
+                % PID katsayilari degerini oku, ve double formatina cevir
+                % (ben belirliyorum)
+                kP = app.Kp.Value; % Oransal kontrolu katsayisi
+                kI = app.Ki.Value; % Integral kontrolu katsayisi
+                kD = app.Ki.Value; % Turev kontrolu katsayisi
+                                
+                error_prior = 0; % eski hata
+                mIntegral =0; % e hatanin integrali
+                
+                desired_angle = str2num(app.AciKnob.Value); % istenen aci degeri oku (ben belirliyorum)
+                display(desired_angle);                     % istenen aci degeri yazdir
+                
+                % istenen aci kontrolu %
+                if desired_angle > 3*pi/2 && desired_angle < -2*pi
+                   desired_angle = (desired_angle - pi/2);
+%                 elseif desired_angle < -pi
+%                    desired_angle = desired_angle + 2*pi;
+                end
+                
+                %%%%%%%%%%%%%%%%%
+                % Dogrusal Hizi %
+                %%%%%%%%%%%%%%%%%
+                vel_linear = app.DogrusalHizSlider.Value; % dogrusal hizinin degeri oku
+                
+                t1=[]; % zaman dizisi (x)
+                
+                u_arr =[];      % "u" kontrol sinyali cizdirmek icin bir dizi 
+                angle_arr = []; % aci cizdirmek icin
+                error_arr = []; % hata cizdirmek icin 
+                
+                vl = 0;
+                vr = 0;
+                
+                vl_arr = []; % sol tekerligin dizisi
+                vr_arr = []; % sag tekerligin dizisi
+                topwl =[];   % sol tekerligin acisal hiz dizisi
+                topwr=[];    % sag tekerligin acisal hiz dizisi
+                
+                color = rand(1,3); % random renk sec
+ 
+                for i=0:TF
+                    
+                    angle = mlrobotreadcompassangle(app.myRobot); % posuladan gelen aci degeri oku
+                    robot_angle = deg2rad(angle);                 % okunan aci degeri radyan'a cevir  
+                    display(robot_angle);                         % simdiki robotun aci degeri yazdir
+                    
+                    % Hatayi hesapla %
+                    % hata = istenen aci, simdiki robotun acisi arasindaki fark al
+                    error = desired_angle - robot_angle; 
+                    display(error); % hata yazdir
+                    
+                    % input konrolu %
+                    if error > pi/2 %( eger hata > 1.5708 ise )
+                       error = -(error - pi);
+                        if error < -pi/2
+                            error = -(error - pi);
+                        end
+                    end
+                    
+
+                    % e hatasinin integrali: gecmise donup tum hatalari toplamini al
+                    % integral = integral + error * iteration_time
+                    mIntegral = mIntegral + (error * dt); % integral
+                    
+                    % e hatasinin turevi: bir onceki hatadan suandaki hatanin farki al
+                    % turev = ( suandaki_hata - onceki_hata ) / iteration_time
+                    % turev
+                    derivate = (error-error_prior) / dt;  
+                    
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                    % pid sinyali (kontrol sinyali) %
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                    % hatalari PID kontroller 'e ver 
+                    % u = oransa kontrolu + integral kontrolu + turev kontrolu 
+                    u = kP * error + kI * mIntegral + kD * derivate; 
+                    % u sinyali yazdir
+                    display(u);  
+                    
+                    error_prior = error; % eski hatayi guncelle
+                    
+                    % PID kontrolerin ciktisini alip, tekerleklere uygula
+                    vl = vel_linear - u; % sol tekerligin uzerinde uygulanan gerilim sevyiesi
+                    vr = vel_linear + u; % sag tekerligin uzerinde uygulanan gerilim sevyiesi
+                    
+                    %tekerleklere uygulanan gerilim kisitla
+                    % set voltage [-5 ~ 5]volt
+                    if vl > 5 % maximum voltage (5v)
+                        vl = 5;
+                    end
+                    
+                    if vl < -5 % minimum voltage (-5)
+                        vl = -5;
+                    end
+                    
+                    if vr > 5 % maximum voltage (5v)
+                        vr = 5;
+                    end
+                    
+                    if vr < -5 % minimum voltage (-5)
+                        vr = -5;
+                    end
+                    
+                    display(vl); % sol tekerligin hizi yazdir
+                    display(vr); % sag tekerligin hizi yazdir 
+                    
+                    % hareket basla
+                    mlrobotsetmotorvoltage(robot, 'left', -vl);
+                    mlrobotsetmotorvoltage(robot, 'right', vr);
+                    pause(dt); % "0.5" saniye bekle
+                    %display(i);          
+                    
+                    % acisal hizi oku % [rad/s]
+                    wl = mlrobotreadwheelspeed(robot, 'left'); % sol tekerligin acisal hizi oku 
+                    wr = mlrobotreadwheelspeed(robot, 'right'); % sag tekerligin acisal hizi oku
+                    
+                    
+                    % acisal hiz dizilar (graph'lar cizdirmek icin)
+                    % degerler tutiyor
+                    angle_arr = [angle_arr robot_angle]; % aci 
+                    error_arr = [error_arr error];       % hata
+                    topwl = [topwl wl];                  % sol acisal hiz
+                    topwr = [topwr wr];                  % sag acisal hiz
+                    u_arr =[u_arr u];                    % "u" kontrol sinyali
+                    vr_arr = [vr_arr vr];                % sag hiz
+                    vl_arr = [vl_arr vl];                % sol hiz
+                    t1 = [t1 i];                         % zaman (x axis)
+                    
+                    
+                    %%%%%%%%%%
+                    % graphs %
+                    %%%%%%%%%%
+                    line(app.graph_kontrol, t1, u_arr, 'color',color);
+                    grid on; hold on;
+                    
+                    line(app.graph_aci, t1, angle_arr, 'color',color);
+                    grid on; hold on;
+                    
+                    line(app.graph_hata, t1, error_arr, 'color',color);
+                    grid on; hold on;
+                    
+                    line(app.graph_vr, t1, vr_arr, 'color',color);
+                    grid on; hold on;
+                    
+                    line(app.graph_vl, t1, vl_arr, 'color',color);
+                    grid on; hold on;
+                    
+                    line(app.graph_tekerlek_hiz, t1, topwl, 'color',color);
+                    grid on; hold on;
+                    line(app.graph_tekerlek_hiz, t1, topwr, 'color',color);
+                                        
+                end
+                
+                mlrobotstop(robot); % simulasyonu durdur
+                app.running=1;
+                app.SimulasyonButton.Text = 'Simulasyonu Başlat';
+            
+            end
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create IZURobotTeknolojileriDersiProjeOdeviUIFigure and hide until all components are created
+            app.IZURobotTeknolojileriDersiProjeOdeviUIFigure = uifigure('Visible', 'off');
+            app.IZURobotTeknolojileriDersiProjeOdeviUIFigure.Position = [100 100 950 725];
+            app.IZURobotTeknolojileriDersiProjeOdeviUIFigure.Name = 'IZU Robot Teknolojileri Dersi Proje Odevi';
+
+            % Create DorusalHzSliderLabel
+            app.DorusalHzSliderLabel = uilabel(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            app.DorusalHzSliderLabel.HorizontalAlignment = 'right';
+            app.DorusalHzSliderLabel.Position = [792 19 75 22];
+            app.DorusalHzSliderLabel.Text = 'Doğrusal Hız';
+
+            % Create DogrusalHizSlider
+            app.DogrusalHizSlider = uislider(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            app.DogrusalHizSlider.Limits = [0 3];
+            app.DogrusalHizSlider.Orientation = 'vertical';
+            app.DogrusalHizSlider.MinorTicks = [];
+            app.DogrusalHizSlider.Position = [888 28 3 150];
+
+            % Create graph_aci
+            app.graph_aci = uiaxes(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            title(app.graph_aci, 'Açı [rad]')
+            xlabel(app.graph_aci, 't')
+            app.graph_aci.Box = 'on';
+            app.graph_aci.XGrid = 'on';
+            app.graph_aci.YGrid = 'on';
+            app.graph_aci.Position = [1 541 479 185];
+
+            % Create graph_hata
+            app.graph_hata = uiaxes(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            title(app.graph_hata, 'hata [rad]')
+            xlabel(app.graph_hata, 't')
+            app.graph_hata.Box = 'on';
+            app.graph_hata.XGrid = 'on';
+            app.graph_hata.YGrid = 'on';
+            app.graph_hata.Position = [479 541 472 185];
+
+            % Create graph_tekerlek_hiz
+            app.graph_tekerlek_hiz = uiaxes(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            title(app.graph_tekerlek_hiz, 'Tekerlek Açısal Hızları [rad/s]')
+            xlabel(app.graph_tekerlek_hiz, 't')
+            app.graph_tekerlek_hiz.Box = 'on';
+            app.graph_tekerlek_hiz.XGrid = 'on';
+            app.graph_tekerlek_hiz.YGrid = 'on';
+            app.graph_tekerlek_hiz.Position = [1 357 479 185];
+
+            % Create graph_kontrol
+            app.graph_kontrol = uiaxes(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            title(app.graph_kontrol, 'Kontrol Sinyali (u)')
+            xlabel(app.graph_kontrol, 't')
+            app.graph_kontrol.Box = 'on';
+            app.graph_kontrol.XGrid = 'on';
+            app.graph_kontrol.YGrid = 'on';
+            app.graph_kontrol.Position = [479 357 472 185];
+
+            % Create graph_vl
+            app.graph_vl = uiaxes(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            title(app.graph_vl, 'vl [volt]')
+            xlabel(app.graph_vl, 't')
+            app.graph_vl.Box = 'on';
+            app.graph_vl.XGrid = 'on';
+            app.graph_vl.YGrid = 'on';
+            app.graph_vl.Position = [1 173 479 185];
+
+            % Create graph_vr
+            app.graph_vr = uiaxes(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            title(app.graph_vr, 'vr [volt]')
+            xlabel(app.graph_vr, 't')
+            app.graph_vr.Box = 'on';
+            app.graph_vr.XGrid = 'on';
+            app.graph_vr.YGrid = 'on';
+            app.graph_vr.Position = [479 173 472 185];
+
+            % Create SimulasyonButton
+            app.SimulasyonButton = uibutton(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure, 'push');
+            app.SimulasyonButton.ButtonPushedFcn = createCallbackFcn(app, @SimulasyonButtonPushed, true);
+            app.SimulasyonButton.Position = [510 48 126 114];
+            app.SimulasyonButton.Text = 'Simulasyonu Başlat';
+
+            % Create KpEditFieldLabel
+            app.KpEditFieldLabel = uilabel(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            app.KpEditFieldLabel.HorizontalAlignment = 'right';
+            app.KpEditFieldLabel.Position = [307 140 25 22];
+            app.KpEditFieldLabel.Text = 'Kp';
+
+            % Create Kp
+            app.Kp = uieditfield(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure, 'numeric');
+            app.Kp.Position = [347 140 100 22];
+            app.Kp.Value = 1;
+
+            % Create KiEditFieldLabel
+            app.KiEditFieldLabel = uilabel(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            app.KiEditFieldLabel.HorizontalAlignment = 'right';
+            app.KiEditFieldLabel.Position = [307 95 25 22];
+            app.KiEditFieldLabel.Text = 'Ki';
+
+            % Create Ki
+            app.Ki = uieditfield(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure, 'numeric');
+            app.Ki.Position = [347 95 100 22];
+
+            % Create KdEditField_2Label
+            app.KdEditField_2Label = uilabel(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            app.KdEditField_2Label.HorizontalAlignment = 'right';
+            app.KdEditField_2Label.Position = [307 48 25 22];
+            app.KdEditField_2Label.Text = 'Kd';
+
+            % Create Kd
+            app.Kd = uieditfield(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure, 'numeric');
+            app.Kd.Position = [347 48 100 22];
+
+            % Create AKnobLabel
+            app.AKnobLabel = uilabel(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure);
+            app.AKnobLabel.HorizontalAlignment = 'center';
+            app.AKnobLabel.Position = [95 19 25 22];
+            app.AKnobLabel.Text = 'Açı';
+
+            % Create AciKnob
+            app.AciKnob = uiknob(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure, 'discrete');
+            app.AciKnob.Items = {'0', 'pi/8', 'pi/4', '3*pi/8', 'pi/2', '5*pi/8', '6*pi/8', '7*pi/8', 'pi', '9*pi/8', '5*pi/4', '11*pi/8', '3*pi/2', '13*pi/8', '7*pi/4', '15*pi/8', '2*pi'};
+            app.AciKnob.Position = [65 56 85 85];
+            app.AciKnob.Value = '0';
+
+            % Show the figure after all components are created
+            app.IZURobotTeknolojileriDersiProjeOdeviUIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = myRobot_dd
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.IZURobotTeknolojileriDersiProjeOdeviUIFigure)
+
+            % Execute the startup function
+            runStartupFcn(app, @startupFcn)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.IZURobotTeknolojileriDersiProjeOdeviUIFigure)
+        end
+    end
+end
